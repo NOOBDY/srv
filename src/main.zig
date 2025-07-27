@@ -35,15 +35,17 @@ pub fn main() !void {
 
         std.debug.print("{} connected\n", .{client_address});
 
-        const content = util.read(&allocator, socket) catch |err| {
+        var reader = try util.Reader.init(&allocator, socket);
+        defer reader.deinit();
+
+        const content = reader.read() catch |err| {
             std.debug.print("error read: {}\n", .{err});
             continue;
         };
-        defer content.deinit();
 
-        std.debug.print("{s}\n", .{content.items});
+        std.debug.print("{s}\n", .{content});
 
-        util.write(socket, content.items) catch |err| {
+        util.write(socket, content) catch |err| {
             std.debug.print("error write: {}\n", .{err});
         };
     }

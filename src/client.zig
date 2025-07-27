@@ -10,6 +10,11 @@ const PORT = 8080;
 const BUF_SIZE = 4;
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    defer std.debug.assert(gpa.deinit() == .ok);
+
+    const allocator = gpa.allocator();
+
     const addr = try net.Address.parseIp(ADDR, PORT);
 
     const tpe: u32 = posix.SOCK.STREAM;
@@ -23,6 +28,9 @@ pub fn main() !void {
 
     try posix.shutdown(client, .send);
 
-    const res = try util.read(&std.heap.page_allocator, client);
-    std.debug.print("{s}\n", .{res.items});
+    var reader = try util.Reader.init(&allocator, client);
+    defer reader.deinit();
+
+    const res = try reader.read();
+    std.debug.print("{s}\n", .{res});
 }
