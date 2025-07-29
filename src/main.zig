@@ -7,10 +7,49 @@ const util = @import("util.zig");
 
 const ADDR = "127.0.0.1";
 const PORT = 8080;
+const POOL_SIZE = 8;
+
+const Client = struct {
+    allocator: *const std.mem.Allocator,
+    socket: posix.socket_t,
+    addr: std.net.Address,
+
+    fn handle(self: Client) void {
+        self._handle() catch |err| switch (err) {
+            error.Closed => {},
+            else => std.debug.print("{any} client handle error: {}\n", .{ self.addr, err }),
+        };
+    }
+
+    fn _handle(self: Client) !void {
+        const socket = self.socket;
+
+        defer posix.close(socket);
+
+        std.debug.print("{} connected\n", .{self.addr});
+
+        var reader = try util.Reader.init(self.allocator, socket);
+        defer reader.deinit();
+
+        while (true) {
+            const content = try reader.read();
+
+            std.debug.print("{s}\n", .{content});
+        }
+    }
+};
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }).init;
+    defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
+
+    var pool: std.Thread.Pool = undefined;
+    try std.Thread.Pool.init(&pool, .{
+        .allocator = allocator,
+        .n_jobs = POOL_SIZE,
+    });
+    defer pool.deinit();
 
     const addr = try net.Address.resolveIp(ADDR, PORT);
 
@@ -31,22 +70,8 @@ pub fn main() !void {
             std.debug.print("error accept: {}\n", .{err});
             continue;
         };
-        defer posix.close(socket);
 
-        std.debug.print("{} connected\n", .{client_address});
-
-        var reader = try util.Reader.init(&allocator, socket);
-        defer reader.deinit();
-
-        const content = reader.read() catch |err| {
-            std.debug.print("error read: {}\n", .{err});
-            continue;
-        };
-
-        std.debug.print("{s}\n", .{content});
-
-        util.write(socket, content) catch |err| {
-            std.debug.print("error write: {}\n", .{err});
-        };
+        const client = Client{ .allocator = &allocator, .socket = socket, .addr = client_address };
+        try pool.spawn(Client.handle, .{client});
     }
 }
