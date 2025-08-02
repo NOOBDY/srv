@@ -43,17 +43,11 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }).init;
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
-
-    var pool: std.Thread.Pool = undefined;
-    try std.Thread.Pool.init(&pool, .{
-        .allocator = allocator,
-        .n_jobs = POOL_SIZE,
-    });
-    defer pool.deinit();
+    _ = allocator;
 
     const addr = try net.Address.resolveIp(ADDR, PORT);
 
-    const tpe: u32 = posix.SOCK.STREAM;
+    const tpe: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
     const protocol = posix.IPPROTO.TCP;
     const listener = try posix.socket(addr.any.family, tpe, protocol);
     defer posix.close(listener);
@@ -62,16 +56,64 @@ pub fn main() !void {
     try posix.bind(listener, &addr.any, addr.getOsSockLen());
     try posix.listen(listener, 128);
 
+    var polls: [4096]posix.pollfd = undefined;
+    polls[0] = .{
+        .fd = listener,
+        .events = posix.POLL.IN,
+        .revents = 0,
+    };
+    var poll_count: usize = 1;
+
     while (true) {
-        var client_address: net.Address = undefined;
-        var client_address_len: posix.socklen_t = @sizeOf(net.Address);
+        var active = polls[0 .. poll_count + 1];
 
-        const socket = posix.accept(listener, &client_address.any, &client_address_len, 0) catch |err| {
-            std.debug.print("error accept: {}\n", .{err});
-            continue;
-        };
+        // -1 for infinite timeout
+        _ = try posix.poll(active, -1);
 
-        const client = Client{ .allocator = &allocator, .socket = socket, .addr = client_address };
-        try pool.spawn(Client.handle, .{client});
+        if (active[0].revents != 0) {
+            const socket = try posix.accept(listener, null, null, posix.SOCK.NONBLOCK);
+
+            polls[poll_count] = .{
+                .fd = socket,
+                .revents = 0,
+                .events = posix.POLL.IN,
+            };
+
+            poll_count += 1;
+        }
+
+        var i: usize = 1;
+        while (i < active.len) {
+            const polled = active[i];
+
+            const revents = polled.revents;
+            if (revents == 0) {
+                i += 1;
+                continue;
+            }
+
+            var closed = false;
+
+            if (revents & posix.POLL.IN == posix.POLL.IN) {
+                var buf: [4096]u8 = undefined;
+                const read = posix.read(polled.fd, &buf) catch 0;
+                if (read == 0) {
+                    closed = true;
+                } else {
+                    std.debug.print("[{d}]: {s}\n", .{ polled.fd, buf[0..read] });
+                }
+            }
+
+            if (closed or (revents & posix.POLL.HUP == posix.POLL.HUP)) {
+                posix.close(polled.fd);
+
+                const last_index = active.len - 1;
+                active[i] = active[last_index];
+                active = active[0..last_index];
+                poll_count -= 1;
+            } else {
+                i += 1;
+            }
+        }
     }
 }
