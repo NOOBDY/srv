@@ -9,8 +9,6 @@ const ADDR = "127.0.0.1";
 const PORT = 8080;
 const BUF_SIZE = 4;
 
-const THREAD_COUNT = 64;
-
 fn _worker(addr: net.Address, tpe: u32, protocol: comptime_int) !void {
     const client = try posix.socket(addr.any.family, tpe, protocol);
     defer posix.close(client);
@@ -30,12 +28,27 @@ fn worker(addr: net.Address, tpe: u32, protocol: comptime_int) void {
     };
 }
 
+fn parseCpuCount(allocator: *const std.mem.Allocator) !usize {
+    var args = try std.process.argsWithAllocator(allocator.*);
+    defer args.deinit();
+    _ = args.skip();
+
+    if (args.next()) |arg| {
+        return std.fmt.parseInt(usize, arg, 10);
+    } else {
+        return std.Thread.getCpuCount();
+    }
+}
+
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
+
+    const thread_count = try parseCpuCount(&allocator);
+
     var pool: std.Thread.Pool = undefined;
     try std.Thread.Pool.init(&pool, .{
         .allocator = allocator,
-        .n_jobs = THREAD_COUNT,
+        .n_jobs = thread_count,
     });
     defer pool.deinit();
 
@@ -44,7 +57,7 @@ pub fn main() !void {
     const tpe: u32 = posix.SOCK.STREAM;
     const protocol = posix.IPPROTO.TCP;
 
-    for (0..THREAD_COUNT) |_| {
+    for (0..thread_count) |_| {
         try std.Thread.Pool.spawn(&pool, worker, .{ addr, tpe, protocol });
     }
 }

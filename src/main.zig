@@ -9,6 +9,8 @@ const ADDR = "127.0.0.1";
 const PORT = 8080;
 const POOL_SIZE = 8;
 
+const BUF_SIZE = 4096;
+
 const Client = struct {
     allocator: *const std.mem.Allocator,
     socket: posix.socket_t,
@@ -94,8 +96,9 @@ pub fn main() !void {
 
             var closed = false;
 
+            // ready to be read
             if (revents & posix.POLL.IN == posix.POLL.IN) {
-                var buf: [4096]u8 = undefined;
+                var buf: [BUF_SIZE]u8 = undefined;
                 const read = posix.read(polled.fd, &buf) catch 0;
                 if (read == 0) {
                     closed = true;
@@ -104,6 +107,7 @@ pub fn main() !void {
                 }
             }
 
+            // socket closed
             if (closed or (revents & posix.POLL.HUP == posix.POLL.HUP)) {
                 posix.close(polled.fd);
 
